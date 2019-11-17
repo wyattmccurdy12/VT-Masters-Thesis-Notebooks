@@ -1,22 +1,46 @@
+// Landsat 5 import
 var Landsat5 = ee.ImageCollection("LANDSAT/LT05/C01/T1_SR");
+
+// Landsat 7 import
 var Landsat7 = ee.ImageCollection("LANDSAT/LE07/C01/T1_SR");
+
+// Landsat 8 import
 var Landsat8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR");
+
+// Load in the disturbance map
 var VA_Disturbance = ee.Image("users/cmwyatt5/Spring2019/Joby_Original_Map");
+
+// Load in the thins map
 var VA_Thins = ee.Image("users/cmwyatt5/Spring2019/VA_3class_newcodes_Project");
 
+// Load in the state of Virginia
 var state = ee.FeatureCollection("TIGER/2018/States").filter(ee.Filter.eq("STATEFP", "51"));
 var hucTEN = ee.FeatureCollection("USGS/WBD/2017/HUC10").filterBounds(state);
 
-var whatyear = 10; // # years past clearcut
-var howMuchBuff = -5; // # Meters to buffer in 
-var areaThreshold = (30 * 30) * 9; // # meters for threshold
+// Pick the stand age at which to get LAI
+var whatyear = 10; 
 
+// Pick the amount of buffer that you want to go inside your stands
+var howMuchBuff = -5; 
+
+// Pick a nine-pixel threshold for a minimum area
+var areaThreshold = (30 * 30) * 9; 
+
+// Create a mask over the thins map, where only 
 var clr_Mask = VA_Thins.eq(2);
+
+// Update the thins map to include just clearcut areas
 var clearcut = VA_Thins.updateMask(clr_Mask);
 
+// Create a mask for disturbances that happened 1984 and past that
 var dist_Mask = VA_Disturbance.gt(13);
-var dist_Mask2 = VA_Disturbance.lt(39); // This only for 10yr LAI
+
+// Create a mask for pixels that have been harvested up through 2009
+var dist_Mask2 = VA_Disturbance.lt(39); 
+
+// Update the map for pixels that have been harvested 1984 - 2009
 var std_clr = VA_Disturbance.updateMask(dist_Mask).updateMask(dist_Mask2);
+
 
 var stdClr_and_clrCut = clearcut.and(std_clr);
 
