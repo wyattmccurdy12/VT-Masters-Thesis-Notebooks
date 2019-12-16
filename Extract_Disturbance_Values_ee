@@ -1,0 +1,201 @@
+var Landsat8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR"),
+    Landsat5 = ee.ImageCollection("LANDSAT/LT05/C01/T1_SR"),
+    Landsat7 = ee.ImageCollection("LANDSAT/LE07/C01/T1_SR"),
+    huc10 = ee.FeatureCollection("USGS/WBD/2017/HUC10"),
+    states = ee.FeatureCollection("TIGER/2018/States"),
+    VA_Thins = ee.Image("users/cmwyatt5/Spring2019/VA_3class_newcodes_Project"),
+    VA_Disturbance = ee.Image("users/cmwyatt5/Spring2019/Joby_Original_Map");
+
+var VA = states.filter(ee.Filter.eq("STATEFP", "51"));
+var hucs = huc10.filterBounds(VA); // T, his is for real
+hucs = hucs.filter(ee.Filter.neq("huc10", "0301020205"));
+// var hucs = huc10.filterBounds(point); // This is for testing
+// Define Area Threshold -- Now as a 9-pixel square
+var areaThreshold = (30 * 30) * 9; // Nine Pixel Square.
+
+// Define How much to buffer by.
+var howMuchBuff = -5;
+
+////////////////////////////////////////// DEFINE FUNCTIONS //////////////////////////////////////////////////////////////
+
+// mask landsat 5 and 7
+function cloudMaskL457(image){
+  var qa = image.select('pixel_qa'); 
+  
+  var cloudMed = qa.bitwiseAnd(1 << 5) // set qa bit to cloudy
+          .and(qa.bitwiseAnd(1 << 7)) // get medium confidence cloud
+          .or(qa.bitwiseAnd(1 << 3)) // or else cloud shadows
+          .or(qa.bitwiseAnd(1 << 4));
+          
+  // var snow = qa.bitwiseAnd(1 << 4); // get snow bit
+  
+  var mask2 = image.mask().reduce(ee.Reducer.min());
+  
+  return image //mask out high confidence clouds
+              .updateMask(cloudMed.not()) // mask out medium confidence clouds
+              .updateMask(mask2); // mask out surrounding pixels
+}
+
+// mask lansdsat 8
+function maskL8sr(image) {
+
+  // Get the pixel QA band.
+  var qa = image.select('pixel_qa');
+
+  var cloud = qa.bitwiseAnd(1 << 5) // cloud flag set
+      .and(qa.bitwiseAnd(1 << 7)); // or the cloud HIGH set
+      
+  var cirrus = qa.bitwiseAnd((1 << 9)) // cirrus flag set high
+      .and(qa.bitwiseAnd(1 << 5)); // and cloud flag set
+      
+  var snow = qa.bitwiseAnd(1 << 4); // snow flag set
+  
+  var shadow = qa.bitwiseAnd(1 << 3); // cloud shadow flag set
+  
+  // Return the masked image
+  return image.updateMask(cloud.not())
+          .updateMask(cirrus.not())
+          .updateMask(snow.not())
+          .updateMask(shadow.not());
+}
+
+// These provide simple ratio index. Dividing near infra-red by red. 
+function simpleRatioL457(image){
+  var ratio = image.expression(
+      'NIR / RED ', {
+        'NIR': image.select('B4'),
+        'RED': image.select('B3')
+  }).rename('simpleRatio');
+  return image.addBands(ratio)
+  .select('simpleRatio');
+}
+
+function simpleRatio8(image){
+  var ratio = image.expression(
+      'NIR / RED ', {
+        'NIR': image.select('B5'),
+        'RED': image.select('B4')
+  }).rename('simpleRatio');
+  return image.addBands(ratio)
+  .select('simpleRatio');
+}
+
+// Leaf area index (LAI) from simple ratio (SR)
+var LAIfmSR = function(image){
+  var LAI = image.expression(
+    "SR * 0.3329155 - 0.00212", {
+      "SR": image.select("simpleRatio")
+    }).rename("LAI");
+    return image.addBands(LAI)
+    .select("LAI");
+};
+
+/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////  CREATE LAI IMAGE COLLECTION //////////////////////////////////////////////////////////////
+
+// # Filter Landsat5, 7, and 8 surface reflectance
+// # using the cloud mask, the simple ratio function, and the LAI function. 
+// # This will give us a collection of one-band LAI images.
+var Landsat5_LAI = Landsat7.map(cloudMaskL457).map(simpleRatioL457).map(LAIfmSR);
+
+var Landsat7_LAI = Landsat5.map(cloudMaskL457).map(simpleRatioL457).map(LAIfmSR);
+
+var Landsat8_LAI = Landsat8.map(maskL8sr).map(simpleRatio8).map(LAIfmSR);
+
+// # The merged collection of all the LAI image stacks.
+var collection = Landsat5_LAI.merge(Landsat7_LAI).merge(Landsat8_LAI)
+.sort("system:time_start");
+
+// # Filter to give only data from the winter months. December through February.
+// # Then filter to make sure that data only comes from path-rows 16-34 and 15-34.
+var winterCollection = collection.filter(ee.Filter.calendarRange(2,2,'month'))
+.filterBounds(VA);
+
+/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////  CREATE STUDY AREA MASK  ////////////////////////////////////////////////////////
+
+var clr_Mask = VA_Thins.eq(2);
+
+var clearcut = VA_Thins.updateMask(clr_Mask);
+
+var dist_Mask = VA_Disturbance.gt(13);
+var dist_Mask2 = VA_Disturbance.lt(43);
+
+var std_clr = VA_Disturbance.updateMask(dist_Mask).updateMask(dist_Mask2);
+
+var stdClr_and_clrCut = clearcut.and(std_clr);
+
+var finalClrCut = clearcut.updateMask(stdClr_and_clrCut);
+var finalStdClr = std_clr.updateMask(stdClr_and_clrCut);
+
+function pullHUC(huc){
+  // {
+  
+  // Stage 1: The feature collection 
+  var vectorVersion = finalStdClr.reduceToVectors({
+    scale: 10,
+    geometryInNativeProjection: true,
+    geometryType: "polygon",
+    maxPixels: 5058413600,
+    geometry: huc.geometry() // Define the limiting geometry
+  });
+  
+  var buff = vectorVersion.geometry().buffer(howMuchBuff);
+  var vectorCollection = ee.FeatureCollection(buff);
+  var onlyPolys = vectorCollection.map(function(feat){
+  feat = ee.Feature(feat);
+  var geometries = feat.geometry().geometries(); // return a list of each geometry
+  var extractPolys = ee.FeatureCollection(geometries.map(function(poly){
+    poly = ee.Geometry.Polygon(ee.Geometry(poly).coordinates());
+    return ee.Feature(poly);
+  }));
+  return extractPolys;
+  }).flatten(); // Flatten because it's a collection of collections
+  var polysWithArea = onlyPolys.map(function(feature){
+    return feature
+    .set("ID", feature.id())
+    .set("area", feature.geometry().area());
+  });
+  var areaSubset = polysWithArea.filter(ee.Filter.gt("area", areaThreshold));
+  
+  // Get disturbance codes from the intersection raster, based on the subset of area. 
+  var disturbance_table = finalStdClr.reduceRegions({
+    collection: areaSubset,
+    reducer: ee.Reducer.mean()
+  });
+  // feature collection above
+  //} // Disturbance Table
+  
+  // Create data table with LAI, and information from polygons
+  var quad = winterCollection.map(function(image) {
+    return image.reduceRegions({
+      collection: disturbance_table, 
+      reducer: ee.Reducer.mean(), 
+      scale: 30
+    }).filter(ee.Filter.neq('mean', null))
+      .map(function(f) { 
+        return f.set('imageId', image.id());
+      });
+  }).flatten();
+  
+  return disturbance_table;
+}
+
+var pulledHUCS = hucs.map(pullHUC).flatten();
+
+Export.table.toDrive({
+  collection: pulledHUCS,
+  description: "HUC10_Disturbance_Map",
+  folder: "HUC10_LAI_Timeseries"
+});
+
+////////////////////////////////////////////////////////////////
+////////////////
+////////////////////////////////////////////////////////////////
+
