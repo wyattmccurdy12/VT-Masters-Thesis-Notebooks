@@ -3,8 +3,8 @@ var Landsat8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR"),
     Landsat7 = ee.ImageCollection("LANDSAT/LE07/C01/T1_SR"),
     huc10 = ee.FeatureCollection("USGS/WBD/2017/HUC10"),
     states = ee.FeatureCollection("TIGER/2018/States"),
-    VA_Thins = ee.Image("users/cmwyatt5/Spring2019/VA_3class_newcodes_Project"),
-    VA_Disturbance = ee.Image("users/cmwyatt5/Spring2019/Joby_Original_Map");
+    VA_Thins = ee.Image("VA_3class_newcodes_Project"),
+    VA_Disturbance = ee.Image("Original_Map");
 
 
 // Load in Virginia boundaries
