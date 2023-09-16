@@ -1,4 +1,5 @@
-# Project2019
-This is a repository for the Master's project. It will be part of supplementary data for the paper. 
+This is where my first Master's thesis lives! 
 
-We will store GEE code and Python code here.
+It is a combination of Google Earth Engine JavaScript and Python in Jupyter Notebook format.
+
+I used this code to process and visualize data for my master's thesis, analyzing forests through the lens of remote sensing. 
